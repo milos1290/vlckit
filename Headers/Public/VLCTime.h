@@ -60,12 +60,26 @@
  */
 - (instancetype)initWithInt:(int)aInt;
 
+/**
+ * init a time object with a given date
+ * \param aDate the absolute time
+ * \return the VLCTime object
+ */
+- (instancetype)initWithDate:(NSDate *)aDate;
+
 /* Properties */
 /**
  * the current time value as NSNumber
  * \return the NSNumber object
  */
 @property (nonatomic, readonly) NSNumber * value;    ///< Holds, in milliseconds, the VLCTime value
+
+/**
+* the current time value as NSDate
+* \return the NSDate object
+*/
+@property (nonatomic, readonly) NSDate * dateValue;
+
 /**
  * the current time value as NSNumber
  * \return the NSNumber object

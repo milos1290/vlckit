@@ -367,6 +367,9 @@ extern NSString * VLCMediaPlayerStateToString(VLCMediaPlayerState state);
  */
 @property (NS_NONATOMIC_IOSONLY, strong) VLCTime *time;
 
+
+-(void)setTimeRangeWith:(NSDate*)startDate andWith:(NSDate*)endDate;
+
 /**
  * Returns the current position (or time) of the feed, inversed if a duration is available
  * \return VLCTime object with requested time

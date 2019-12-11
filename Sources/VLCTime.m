@@ -65,6 +65,15 @@
     return self;
 }
 
+- (instancetype)initWithDate:(NSDate *)aDate
+{
+    if (self = [super init]) {
+        if (aDate)
+            _dateValue = aDate;
+    }
+    return self;
+}
+
 /* NSObject Overrides */
 - (NSString *)description
 {

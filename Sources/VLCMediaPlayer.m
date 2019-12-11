@@ -713,6 +713,11 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * self)
     libvlc_media_player_set_time(_playerInstance, value ? [[value value] longLongValue] : 0);
 }
 
+- (void)setTimeRangeWith:(NSDate *)startDate andWith:(NSDate *)endDate
+{
+    libvlc_media_player_set_time_range(_playerInstance, startDate.timeIntervalSince1970, endDate.timeIntervalSince1970);
+}
+
 - (VLCTime *)time
 {
     return _cachedTime;

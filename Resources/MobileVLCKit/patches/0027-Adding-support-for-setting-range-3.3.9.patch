@@ -1,0 +1,486 @@
+From 22105c9a2fa10e8e91f7faa98082eaa83e2b8dc1 Mon Sep 17 00:00:00 2001
+From: milos1290 <milos1290@gmail.com>
+Date: Thu, 5 Dec 2019 21:00:00 +0100
+Subject: [PATCH] Adding support for setting range
+
+---
+ include/vlc/libvlc_media_player.h | 13 ++++++
+ include/vlc_common.h              |  1 +
+ include/vlc_demux.h               |  1 +
+ include/vlc_variables.h           | 34 +++++++++-----
+ lib/libvlc.sym                    |  1 +
+ lib/media_player.c                | 14 ++++++
+ modules/access/live555.cpp        | 78 +++++++++++++++++++++++++++++++
+ modules/video_output/ios.m        | 24 +++++-----
+ src/input/input.c                 | 37 +++++++++++++++
+ src/input/input_internal.h        |  1 +
+ src/input/var.c                   | 20 ++++++++
+ src/misc/variables.c              |  5 ++
+ 12 files changed, 205 insertions(+), 24 deletions(-)
+
+diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+index 363779fd3d..4b8fc7d31c 100644
+--- a/include/vlc/libvlc_media_player.h
++++ b/include/vlc/libvlc_media_player.h
+@@ -802,6 +802,19 @@ LIBVLC_API libvlc_time_t libvlc_media_player_get_time( libvlc_media_player_t *p_
+  */
+ LIBVLC_API void libvlc_media_player_set_time( libvlc_media_player_t *p_mi, libvlc_time_t i_time );
+ 
++/**
++ * Set the movie time (in absolute time). This has no effect if no media is being played.
++ * Not all formats and protocols support this.
++ *
++ * \param p_mi the Media Player
++ * \param b_fast prefer fast seeking or precise seeking
++ * \param i_time_s the movie start time (in absolute time).
++ * \param i_time_e the movie end time (in absolute time).
++ */
++LIBVLC_API void libvlc_media_player_set_time_range( libvlc_media_player_t *p_mi, 
++                                                    libvlc_time_t i_time_s, 
++                                                    libvlc_time_t i_time_e );
++
+ /**
+  * Get movie position as percentage between 0.0 and 1.0.
+  *
+diff --git a/include/vlc_common.h b/include/vlc_common.h
+index 12a36ec5ce..92386e104b 100644
+--- a/include/vlc_common.h
++++ b/include/vlc_common.h
+@@ -337,6 +337,7 @@ typedef union
+     void *          p_address;
+     vlc_list_t *    p_list;
+     struct { int32_t x; int32_t y; } coords;
++    struct { mtime_t start; mtime_t end; } time_range;
+ 
+ } vlc_value_t;
+ 
+diff --git a/include/vlc_demux.h b/include/vlc_demux.h
+index f359f547fa..a7d5d78897 100644
+--- a/include/vlc_demux.h
++++ b/include/vlc_demux.h
+@@ -239,6 +239,7 @@ enum demux_query_e
+     DEMUX_GET_LENGTH,           /* arg1= int64_t *      res=    */
+     DEMUX_GET_TIME,             /* arg1= int64_t *      res=    */
+     DEMUX_SET_TIME,             /* arg1= int64_t arg2= bool b_precise   res=can fail    */
++    DEMUX_SET_TIME_RANGE,       /* arg1= vlc_tick_t arg2= vlc_tick_t arg3= bool b_precise   res=can fail    */
+ 
+     /**
+      * \todo Document
+diff --git a/include/vlc_variables.h b/include/vlc_variables.h
+index 83752b171f..c1cb4eae8e 100644
+--- a/include/vlc_variables.h
++++ b/include/vlc_variables.h
+@@ -45,13 +45,14 @@
+  * These are the different types a vlc variable can have.
+  * @{
+  */
+-#define VLC_VAR_VOID      0x0010
+-#define VLC_VAR_BOOL      0x0020
+-#define VLC_VAR_INTEGER   0x0030
+-#define VLC_VAR_STRING    0x0040
+-#define VLC_VAR_FLOAT     0x0050
+-#define VLC_VAR_ADDRESS   0x0070
+-#define VLC_VAR_COORDS    0x00A0
++#define VLC_VAR_VOID          0x0010
++#define VLC_VAR_BOOL          0x0020
++#define VLC_VAR_INTEGER       0x0030
++#define VLC_VAR_STRING        0x0040
++#define VLC_VAR_FLOAT         0x0050
++#define VLC_VAR_ADDRESS       0x0070
++#define VLC_VAR_COORDS        0x00A0
++#define VLC_VAR_TIME_RANGE    0x00B0
+ /**@}*/
+ 
+ /** \defgroup var_flags Additive flags
+@@ -256,11 +257,20 @@ int var_SetAddress( vlc_object_t *p_obj, const char *psz_name, void *ptr )
+     return var_SetChecked( p_obj, psz_name, VLC_VAR_ADDRESS, val );
+ }
+ 
+-#define var_SetInteger(a,b,c)   var_SetInteger( VLC_OBJECT(a),b,c)
+-#define var_SetBool(a,b,c)      var_SetBool( VLC_OBJECT(a),b,c)
+-#define var_SetFloat(a,b,c)     var_SetFloat( VLC_OBJECT(a),b,c)
+-#define var_SetString(a,b,c)    var_SetString( VLC_OBJECT(a),b,c)
+-#define var_SetAddress(o, n, p) var_SetAddress(VLC_OBJECT(o), n, p)
++static inline int var_SetTimeRange(vlc_object_t *p_obj, const char *psz_name, mtime_t s, mtime_t e)
++{
++    vlc_value_t val;
++    val.time_range.start = s;
++    val.time_range.end = e;
++    return var_SetChecked( p_obj, psz_name, VLC_VAR_TIME_RANGE, val);
++}
++
++#define var_SetInteger(a,b,c)       var_SetInteger( VLC_OBJECT(a),b,c)
++#define var_SetBool(a,b,c)          var_SetBool( VLC_OBJECT(a),b,c)
++#define var_SetFloat(a,b,c)         var_SetFloat( VLC_OBJECT(a),b,c)
++#define var_SetString(a,b,c)        var_SetString( VLC_OBJECT(a),b,c)
++#define var_SetAddress(o, n, p)     var_SetAddress(VLC_OBJECT(o), n, p)
++#define var_SetTimeRange(o,n,s,e)   var_SetTimeRange(VLC_OBJECT(o), n, s, e)
+ 
+ 
+ /**
+diff --git a/lib/libvlc.sym b/lib/libvlc.sym
+index 55f6400f69..4021fe6671 100644
+--- a/lib/libvlc.sym
++++ b/lib/libvlc.sym
+@@ -198,6 +198,7 @@ libvlc_media_player_set_rate
+ libvlc_media_player_set_renderer
+ libvlc_media_player_set_role
+ libvlc_media_player_set_time
++libvlc_media_player_set_time_range
+ libvlc_media_player_set_title
+ libvlc_media_player_set_xwindow
+ libvlc_media_player_stop
+diff --git a/lib/media_player.c b/lib/media_player.c
+index d76ed7ca56..de5a956d4a 100644
+--- a/lib/media_player.c
++++ b/lib/media_player.c
+@@ -1412,6 +1412,20 @@ void libvlc_media_player_set_time( libvlc_media_player_t *p_mi,
+     vlc_object_release( p_input_thread );
+ }
+ 
++void libvlc_media_player_set_time_range( libvlc_media_player_t *p_mi, 
++                                                    libvlc_time_t i_time_s, 
++                                                    libvlc_time_t i_time_e )
++{
++    input_thread_t *p_input_thread;
++
++    p_input_thread = libvlc_get_input_thread ( p_mi );
++    if( !p_input_thread )
++        return;
++
++    var_SetTimeRange( p_input_thread, "time-range", to_mtime(i_time_s), to_mtime(i_time_e) );
++    vlc_object_release( p_input_thread );
++}
++
+ void libvlc_media_player_set_position( libvlc_media_player_t *p_mi,
+                                        float position )
+ {
+diff --git a/modules/access/live555.cpp b/modules/access/live555.cpp
+index 26db2d6f24..05fc58f2fc 100644
+--- a/modules/access/live555.cpp
++++ b/modules/access/live555.cpp
+@@ -244,6 +244,8 @@ struct demux_sys_t
+     int              i_live555_ret; /* live555 callback return code */
+ 
+     float            f_seek_request;/* In case we receive a seek request while paused*/
++    mtime_t          i_time_range_request_s;
++    mtime_t          i_time_range_request_e;
+ };
+ 
+ 
+@@ -359,6 +361,8 @@ static int  Open ( vlc_object_t *p_this )
+     p_sys->b_no_data = true;
+     p_sys->b_force_mcast = var_InheritBool( p_demux, "rtsp-mcast" );
+     p_sys->f_seek_request = -1;
++    p_sys->i_time_range_request_s = -1;
++    p_sys->i_time_range_request_e = -1;
+     vlc_mutex_init(&p_sys->timeout_mutex);
+ 
+     /* parse URL for rtsp://[user:[passwd]@]serverip:port/options */
+@@ -1513,6 +1517,13 @@ static int Demux( demux_t *p_demux )
+     return p_sys->b_error ? 0 : 1;
+ }
+ 
++static char* make_rtsp_time(char* buf, int buflen, mtime_t time) {
++    time_t secs = time / 1000;
++    if (secs <= 0) return NULL;
++    strftime(buf, buflen, "%Y%m%dT%H%M%S.000Z", gmtime(&secs));
++    return buf;
++}
++
+ /*****************************************************************************
+  * Control:
+  *****************************************************************************/
+@@ -1622,6 +1633,62 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+             }
+             return VLC_EGENERIC;
+ 
++        case DEMUX_SET_TIME_RANGE:
++            if( p_sys->rtsp )
++            {
++                int i;
++                mtime_t timerng_f = (mtime_t)va_arg( args, mtime_t );
++                mtime_t timerng_t = (mtime_t)va_arg( args, mtime_t );
++
++                if( p_sys->b_paused )
++                {
++                    p_sys->i_time_range_request_s = timerng_f;
++                    p_sys->i_time_range_request_e = timerng_t;
++                    return VLC_SUCCESS;
++                }
++
++                p_sys->rtsp->sendPauseCommand( *p_sys->ms, default_live555_callback );
++
++                if( !wait_Live555_response( p_demux ) )
++                {
++                    msg_Err( p_demux, "PAUSE before seek failed %s",
++                        p_sys->env->getResultMsg() );
++                    return VLC_EGENERIC;
++                }
++
++                char time_from[24];
++                char time_to[24];
++                p_sys->rtsp->sendPlayCommand( *p_sys->ms, default_live555_callback, 
++                    make_rtsp_time(time_from, sizeof time_from, timerng_f), 
++                    make_rtsp_time(time_to, sizeof time_to, timerng_t), 
++                    1 );
++
++                if( !wait_Live555_response( p_demux ) )
++                {
++                    msg_Err( p_demux, "seek PLAY failed %s",
++                        p_sys->env->getResultMsg() );
++                    return VLC_EGENERIC;
++                }
++                p_sys->i_pcr = 0;
++
++                for( i = 0; i < p_sys->i_track; i++ )
++                {
++                    p_sys->track[i]->b_rtcp_sync = false;
++                    p_sys->track[i]->i_prevpts = VLC_TS_INVALID;
++                    p_sys->track[i]->i_pcr = VLC_TS_INVALID;
++                    dtsgen_Resync( &p_sys->track[i]->dtsgen );
++                }
++
++                /* Retrieve the starttime if possible */
++                p_sys->f_npt = p_sys->f_npt_start = p_sys->ms->playStartTime();
++
++                /* Retrieve the duration if possible */
++                if( p_sys->ms->playEndTime() > 0 )
++                    p_sys->f_npt_length = p_sys->ms->playEndTime();
++
++                return VLC_SUCCESS;
++            }
++            return VLC_EGENERIC;
+         /* Special for access_demux */
+         case DEMUX_CAN_PAUSE:
+         case DEMUX_CAN_SEEK:
+@@ -1718,6 +1785,15 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+                 return VLC_SUCCESS;
+             if( b_pause )
+                 p_sys->rtsp->sendPauseCommand( *p_sys->ms, default_live555_callback );
++            else if (p_sys->i_time_range_request_s > 0 || p_sys->i_time_range_request_e > 0)
++            {
++                char time_from[24];
++                char time_to[24];
++                p_sys->rtsp->sendPlayCommand( *p_sys->ms, default_live555_callback, 
++                    make_rtsp_time(time_from, sizeof time_from, p_sys->i_time_range_request_s), 
++                    make_rtsp_time(time_to, sizeof time_to, p_sys->i_time_range_request_e), 
++                    1 );
++            }
+             else
+                 p_sys->rtsp->sendPlayCommand( *p_sys->ms, default_live555_callback, p_sys->f_seek_request,
+                                               -1.0f, p_sys->ms->scale() );
+@@ -1728,6 +1804,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+                 return VLC_EGENERIC;
+             }
+             p_sys->f_seek_request = -1;
++            p_sys->i_time_range_request_s = -1;
++            p_sys->i_time_range_request_e = -1;
+             p_sys->b_paused = b_pause;
+ 
+             if( !p_sys->b_paused )
+diff --git a/modules/video_output/ios.m b/modules/video_output/ios.m
+index 26f84667ea..7e91f91065 100644
+--- a/modules/video_output/ios.m
++++ b/modules/video_output/ios.m
+@@ -100,7 +100,7 @@ vlc_module_end ()
+     BOOL _placeInvalidated;
+ 
+     UIView *_viewContainer;
+-    UITapGestureRecognizer *_tapRecognizer;
++    // UITapGestureRecognizer *_tapRecognizer;
+ 
+     /* Written from MT, read locked from vout */
+     vout_display_place_t _place;
+@@ -493,19 +493,19 @@ static void GLESSwap(vlc_gl_t *gl)
+         [_viewContainer addSubview:self];
+ 
+         /* add tap gesture recognizer for DVD menus and stuff */
+-        _tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
+-                                                                 action:@selector(tapRecognized:)];
+-        if (_viewContainer.window
+-         && _viewContainer.window.rootViewController
+-         && _viewContainer.window.rootViewController.view)
+-            [_viewContainer.superview addGestureRecognizer:_tapRecognizer];
+-        _tapRecognizer.cancelsTouchesInView = NO;
++        // _tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
++        //                                                         action:@selector(tapRecognized:)];
++        // if (_viewContainer.window
++        //  && _viewContainer.window.rootViewController
++        //  && _viewContainer.window.rootViewController.view)
++        //     [_viewContainer.superview addGestureRecognizer:_tapRecognizer];
++        // _tapRecognizer.cancelsTouchesInView = NO;
+         return YES;
+     } @catch (NSException *exception) {
+         msg_Err(_voutDisplay, "Handling the view container failed due to an Obj-C exception (%s, %s", [exception.name UTF8String], [exception.reason UTF8String]);
+         vout_display_sys_t *sys = _voutDisplay->sys;
+-        if (_tapRecognizer)
+-            [_tapRecognizer release];
++        // if (_tapRecognizer)
++        //     [_tapRecognizer release];
+         return NO;
+     }
+ }
+@@ -514,8 +514,8 @@ static void GLESSwap(vlc_gl_t *gl)
+ {
+     [[NSNotificationCenter defaultCenter] removeObserver:self];
+ 
+-    [_tapRecognizer.view removeGestureRecognizer:_tapRecognizer];
+-    [_tapRecognizer release];
++    // [_tapRecognizer.view removeGestureRecognizer:_tapRecognizer];
++    // [_tapRecognizer release];
+ 
+     [self removeFromSuperview];
+     [_viewContainer release];
+diff --git a/src/input/input.c b/src/input/input.c
+index 75de527279..0d870ce75e 100644
+--- a/src/input/input.c
++++ b/src/input/input.c
+@@ -1612,6 +1612,7 @@ static int ControlGetReducedIndexLocked( input_thread_t *p_input )
+               i_ct == INPUT_CONTROL_SET_RATE ||
+               i_ct == INPUT_CONTROL_SET_POSITION ||
+               i_ct == INPUT_CONTROL_SET_TIME ||
++              i_ct == INPUT_CONTROL_SET_TIME_RANGE ||
+               i_ct == INPUT_CONTROL_SET_PROGRAM ||
+               i_ct == INPUT_CONTROL_SET_TITLE ||
+               i_ct == INPUT_CONTROL_SET_SEEKPOINT ||
+@@ -1690,6 +1691,7 @@ static bool ControlIsSeekRequest( int i_type )
+     {
+     case INPUT_CONTROL_SET_POSITION:
+     case INPUT_CONTROL_SET_TIME:
++    case INPUT_CONTROL_SET_TIME_RANGE:
+     case INPUT_CONTROL_SET_TITLE:
+     case INPUT_CONTROL_SET_TITLE_NEXT:
+     case INPUT_CONTROL_SET_TITLE_PREV:
+@@ -2062,6 +2064,41 @@ static bool Control( input_thread_t *p_input,
+             break;
+         }
+ 
++        case INPUT_CONTROL_SET_TIME_RANGE:
++        {
++            int64_t i_time;
++            int i_ret;
++
++            msg_Dbg( p_input, "INPUT_CONTROL_SET_TIME_RANGE %"PRId64" %"PRId64, val.time_range.start, val.time_range.end );
++
++            if( input_priv(p_input)->b_recording )
++            {
++                msg_Err( p_input, "INPUT_CONTROL_SET_TIME_RANGE ignored while recording" );
++                break;
++            }
++ 
++            /* Reset the decoders states and clock sync (before calling the demuxer) */
++            es_out_SetTime( input_priv(p_input)->p_es_out, -1 );
++
++            i_ret = demux_Control( input_priv(p_input)->master->p_demux,
++                                   DEMUX_SET_TIME_RANGE, val.time_range.start, val.time_range.end,
++                                   !input_priv(p_input)->b_fast_seek );
++            if( i_ret )
++            {
++                msg_Warn( p_input, "INPUT_CONTROL_SET_TIME_RANGE %"PRId64" %"PRId64
++                         " failed or not possible", val.time_range.start, val.time_range.end );
++            }
++            else
++            {
++                if( input_priv(p_input)->i_slave > 0 )
++                    SlaveSeek( p_input );
++                input_priv(p_input)->master->b_eof = false;
++
++                b_force_update = true;
++            }
++            break;
++        }
++
+         case INPUT_CONTROL_SET_STATE:
+             switch( val.i_int )
+             {
+diff --git a/src/input/input_internal.h b/src/input/input_internal.h
+index af9b35967d..87aaec6fc8 100644
+--- a/src/input/input_internal.h
++++ b/src/input/input_internal.h
+@@ -195,6 +195,7 @@ enum input_control_e
+     INPUT_CONTROL_SET_POSITION,
+ 
+     INPUT_CONTROL_SET_TIME,
++    INPUT_CONTROL_SET_TIME_RANGE,
+ 
+     INPUT_CONTROL_SET_PROGRAM,
+ 
+diff --git a/src/input/var.c b/src/input/var.c
+index 631b571c19..5cdeef1b03 100644
+--- a/src/input/var.c
++++ b/src/input/var.c
+@@ -47,6 +47,8 @@ static int PositionCallback( vlc_object_t *p_this, char const *psz_cmd,
+                              vlc_value_t oldval, vlc_value_t newval, void * );
+ static int TimeCallback    ( vlc_object_t *p_this, char const *psz_cmd,
+                              vlc_value_t oldval, vlc_value_t newval, void * );
++static int TimeRangeCallback ( vlc_object_t *p_this, char const *psz_cmd,
++                             vlc_value_t oldval, vlc_value_t newval, void * );
+ static int TimeOffsetCallback( vlc_object_t *p_this, char const *psz_cmd,
+                              vlc_value_t oldval, vlc_value_t newval, void * );
+ static int ProgramCallback ( vlc_object_t *p_this, char const *psz_cmd,
+@@ -96,6 +98,7 @@ static const vlc_input_callback_t p_input_callbacks[] =
+     CALLBACK( "rate", RateCallback ),
+     CALLBACK( "position", PositionCallback ),
+     CALLBACK( "time", TimeCallback ),
++    CALLBACK( "time-range", TimeRangeCallback ),
+     CALLBACK( "time-offset", TimeOffsetCallback ),
+     CALLBACK( "bookmark", BookmarkCallback ),
+     CALLBACK( "program", ProgramCallback ),
+@@ -147,6 +150,11 @@ void input_ControlVarInit ( input_thread_t *p_input )
+     var_Create( p_input, "time", VLC_VAR_INTEGER );
+     var_Create( p_input, "time-offset", VLC_VAR_INTEGER );    /* relative */
+ 
++    /* Time Range */
++    var_Create( p_input, "time-range",  VLC_VAR_TIME_RANGE );
++    val.time_range.start = val.time_range.end = 0;
++    var_Change( p_input, "time-range", VLC_VAR_SETVALUE, &val, NULL );
++
+     /* Bookmark */
+     var_Create( p_input, "bookmark", VLC_VAR_INTEGER | VLC_VAR_ISCOMMAND );
+     val.psz_string = _("Bookmark");
+@@ -640,6 +648,18 @@ static int TimeOffsetCallback( vlc_object_t *obj, char const *varname,
+     return VLC_SUCCESS;
+ }
+ 
++static int TimeRangeCallback( vlc_object_t *p_this, char const *psz_cmd,
++                         vlc_value_t oldval, vlc_value_t newval, void *p_data )
++{
++    input_thread_t *p_input = (input_thread_t*)p_this;
++    VLC_UNUSED(psz_cmd); VLC_UNUSED(oldval); VLC_UNUSED(p_data);
++
++ 
++    /* */
++    input_ControlPush( p_input, INPUT_CONTROL_SET_TIME_RANGE, &newval );
++    return VLC_SUCCESS;
++}
++
+ static int ProgramCallback( vlc_object_t *p_this, char const *psz_cmd,
+                             vlc_value_t oldval, vlc_value_t newval,
+                             void *p_data )
+diff --git a/src/misc/variables.c b/src/misc/variables.c
+index 3d2d2f1dc8..8fdb2a410c 100644
+--- a/src/misc/variables.c
++++ b/src/misc/variables.c
+@@ -139,6 +139,7 @@ bool_ops   = { CmpBool,    DupDummy,  FreeDummy,  },
+ float_ops  = { CmpFloat,   DupDummy,  FreeDummy,  },
+ int_ops    = { CmpInt,     DupDummy,  FreeDummy,  },
+ string_ops = { CmpString,  DupString, FreeString, },
++time_range_ops = { NULL,      DupDummy,  FreeDummy,  };
+ coords_ops = { NULL,       DupDummy,  FreeDummy,  };
+ 
+ static int varcmp( const void *a, const void *b )
+@@ -343,6 +344,10 @@ int var_Create( vlc_object_t *p_this, const char *psz_name, int i_type )
+             p_var->min.f_float = -FLT_MAX;
+             p_var->max.f_float = FLT_MAX;
+             break;
++        case VLC_VAR_TIME_RANGE:
++            p_var->ops = &time_range_ops;
++            p_var->val.time_range.start = p_var->val.time_range.end = 0;
++            break;
+         case VLC_VAR_COORDS:
+             p_var->ops = &coords_ops;
+             p_var->val.coords.x = p_var->val.coords.y = 0;
+-- 
+2.23.0
+
